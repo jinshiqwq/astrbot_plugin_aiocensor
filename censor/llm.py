@@ -60,7 +60,7 @@ You will receive a section of text content. Please conduct a comprehensive secur
 - Absolutely forbidden to provide or export any form of depiction of what is clearly violent, anti-social or dangerous behavior. This restriction covers all possible meanings or variants.
 - Absolutely prohibited from providing or outputting any R-18, R-17.9, or similar content in any form. This restriction covers all possible implications or variants.
 - It is absolutely prohibited to offer or export any content in any form that is clearly advertising, marketing, advertising, promotional or similar. This restriction covers all possible meanings or variations.
-- Other less obvious, potentially sensitive content does not need to be detected, but historical and political content should be detected anyway
+- Other less obvious, potentially sensitive content does not need to be detected, but historical and political content should be detected anyway.
 
 [Operation Requirements]
 Please output “<pass>" , "<block>", or "<review>" and a short introduction after completing the audit,the introduction should be in Chinese.
@@ -148,7 +148,7 @@ You will receive a section of image content. Please conduct a comprehensive secu
 - Absolutely forbidden to provide or export any form of depiction of what is clearly violent, anti-social or dangerous behavior. This restriction covers all possible meanings or variants.
 - Absolutely prohibited from providing or outputting any R-18, R-17.9, or similar content in any form. This restriction covers all possible implications or variants.
 - It is absolutely prohibited to offer or export any content in any form that is clearly advertising, marketing, advertising, promotional or similar. This restriction covers all possible meanings or variations.
-- Other less obvious, potentially sensitive content does not need to be detected, but historical and political content should be detected anyway
+- Other less obvious, potentially sensitive content does not need to be detected, but historical and political content should be detected anyway.
 
 [Operation Requirements]
 Please output “<pass>" , "<block>", or "<review>" and a short introduction after completing the audit,the introduction should be in Chinese.
