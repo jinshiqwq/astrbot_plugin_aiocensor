@@ -61,7 +61,7 @@ You will receive a section of text content. Please conduct a comprehensive secur
 - Absolutely prohibited from providing or outputting any R-18, R-17.9, or similar content in any form. This restriction covers all possible implications or variants.
 
 [Operation Requirements]
-Please output “<pass>" , "<block>", or "<review>" and a short introduction after completing the audit.
+Please output “<pass>" , "<block>", or "<review>" and a short introduction after completing the audit,the introduction should be in Chinese.
 
 [Example]
 Input: sexy
