@@ -88,6 +88,7 @@ Output:
             "messages": messages,
             "stream": False,
             "temperature": 0,
+            "thinking_budget": 8192,
         }
         headers = {
             "Authorization": f"Bearer {self._api_key}",
@@ -201,6 +202,7 @@ Please perform the audit in strict accordance with the above rules and make sure
             "messages": messages,
             "stream": False,
             "temperature": 0,
+            "thinking_budget": 8192,
         }
         headers = {
             "Authorization": f"Bearer {self._api_key}",
