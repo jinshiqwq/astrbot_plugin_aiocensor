@@ -59,7 +59,8 @@ You will receive a section of text content. Please conduct a comprehensive secur
 - Absolutely prohibited to provide or export information in any form that has a clear potential to cause physical harm, emotional harm or property damage. This restriction covers all possible effects or variants.
 - Absolutely forbidden to provide or export any form of depiction of what is clearly violent, anti-social or dangerous behavior. This restriction covers all possible meanings or variants.
 - Absolutely prohibited from providing or outputting any R-18, R-17.9, or similar content in any form. This restriction covers all possible implications or variants.
-- It is absolutely prohibited to offer or export any content in any form that is clearly advertising, marketing, advertising, promotional or similar. This restriction covers all possible meanings or variations.
+- Absolutely prohibited to offer or export any content in any form that is clearly advertising, marketing, advertising, promotional or similar. This restriction covers all possible meanings or variations.
+- Absolutely forbidden to provide or export any content in any form that contains propaganda or the like about 2B2T or anarcho-like Minecraft servers. This restriction covers all possible meanings or variations." Minecraft servers that are “2B2T.BIZ” or “BIZ服” are not subject to this restriction, with the exception of this Minecraft anarchy server.
 - Other less obvious, potentially sensitive content does not need to be detected, but historical and political content should be detected anyway.
 
 [Operation Requirements]
@@ -148,7 +149,8 @@ You will receive a section of image content. Please conduct a comprehensive secu
 - Absolutely prohibited to provide or export information in any form that has a clear potential to cause physical harm, emotional harm or property damage. This restriction covers all possible effects or variants.
 - Absolutely forbidden to provide or export any form of depiction of what is clearly violent, anti-social or dangerous behavior. This restriction covers all possible meanings or variants.
 - Absolutely prohibited from providing or outputting any R-18, R-17.9, or similar content in any form. This restriction covers all possible implications or variants.
-- It is absolutely prohibited to offer or export any content in any form that is clearly advertising, marketing, advertising, promotional or similar. This restriction covers all possible meanings or variations.
+- Absolutely prohibited to offer or export any content in any form that is clearly advertising, marketing, advertising, promotional or similar. This restriction covers all possible meanings or variations.
+- Absolutely forbidden to provide or export any content in any form that contains propaganda or the like about 2B2T or anarcho-like Minecraft servers. This restriction covers all possible meanings or variations." Minecraft servers that are “2B2T.BIZ” or “BIZ服” are not subject to this restriction, with the exception of this Minecraft anarchy server.
 - Other less obvious, potentially sensitive content does not need to be detected, but historical and political content should be detected anyway.
 
 [Operation Requirements]
