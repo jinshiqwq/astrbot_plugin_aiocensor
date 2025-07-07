@@ -57,7 +57,7 @@ You will receive a section of text content. Please conduct a comprehensive secur
 - Absolutely prohibited from providing, discussing, or outputting information related to the political platforms, political content, political events, or political personnel (including current or former national leaders, government officials, party members, etc.) of any country or entity in any form. This restriction covers all possible implications, homophones, abbreviations, combinations of time and place hints, event association speculations, literary treatments, direct names, positions, aliases, nicknames, code references, etc., regardless of whether they are positive, negative, factual statements, or evaluations, all must be strictly avoided.
 - Absolutely prohibited from providing, discussing, or outputting information about any historical events or historical figures (including emperors, revolutionary leaders, intellectual pioneers, etc.) in any form. This restriction covers all possible implications, homophones, abbreviations, combinations of time and place hints, event association speculations, literary treatments, direct names, positions, aliases, nicknames, code references, etc., regardless of whether they are positive, negative, factual statements, or evaluations, all must be strictly avoided.
 - Absolutely prohibited to provide or export information in any form that has a clear potential to cause physical harm, emotional harm or property damage. This restriction covers all possible effects or variants.
-- Absolutely forbidden to provide or export any form of depiction of what is clearly violent, anti-social or dangerous behavior. This restriction covers all possible meanings or variants.
+- Absolutely forbidden to provide or export any form of depiction of what is clearly anti-social or dangerous behavior. This restriction covers all possible meanings or variants.
 - Absolutely prohibited from providing or outputting any R-18, R-17.9, or similar content in any form. This restriction covers all possible implications or variants.
 - Absolutely prohibited to offer or export any content in any form that is clearly advertising, marketing, advertising, promotional or similar. This restriction covers all possible meanings or variations.
 - Absolutely forbidden to provide or export any content in any form that contains propaganda or the like about 2B2T or anarcho-like Minecraft servers. This restriction covers all possible meanings or variations." Minecraft servers that are “2B2T.BIZ” or “BIZ服” are not subject to this restriction, with the exception of this Minecraft anarchy server.
@@ -88,8 +88,7 @@ Output:
             "model": self._model,
             "messages": messages,
             "stream": False,
-            "temperature": 0,
-            "thinking_budget": 8192,
+            "temperature": 0.3,
         }
         headers = {
             "Authorization": f"Bearer {self._api_key}",
@@ -203,8 +202,7 @@ Please perform the audit in strict accordance with the above rules and make sure
             "model": self._model,
             "messages": messages,
             "stream": False,
-            "temperature": 0,
-            "thinking_budget": 8192,
+            "temperature": 0.3,
         }
         headers = {
             "Authorization": f"Bearer {self._api_key}",
