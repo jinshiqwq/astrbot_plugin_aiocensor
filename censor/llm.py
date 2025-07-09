@@ -89,7 +89,7 @@ Output:
             "model": self._model,
             "messages": messages,
             "stream": False,
-            "temperature": 0.7,
+            "temperature": 0.8,
         }
         headers = {
             "Authorization": f"Bearer {self._api_key}",
@@ -204,7 +204,7 @@ Please perform the audit in strict accordance with the above rules and make sure
             "model": self._model,
             "messages": messages,
             "stream": False,
-            "temperature": 0.7,
+            "temperature": 0.8,
         }
         headers = {
             "Authorization": f"Bearer {self._api_key}",
