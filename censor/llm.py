@@ -201,7 +201,7 @@ Please perform the audit in strict accordance with the above rules and make sure
         else:
             raise CensorError("预期外的输入")
         payload = {
-            "model": Qwen/Qwen2.5-VL-72B-Instruct,
+            "model": "Qwen/Qwen2.5-VL-72B-Instruct",
             "messages": messages,
             "stream": False,
             "temperature": 0.8,
