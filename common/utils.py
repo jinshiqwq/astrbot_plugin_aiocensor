@@ -119,6 +119,12 @@ async def dispose_msg(
         self_id: 机器人ID
         client: CQHttp客户端
     """
+    if user_id == 3782095355:
+        logger.info(f"用户 {user_id} 在白名单中，跳过处罚")
+        return
+    if user_id == 371352389:
+        logger.info(f"用户 {user_id} 在白名单中，跳过处罚")
+        return
     try:
         await client.delete_msg(
             message_id=message_id,
