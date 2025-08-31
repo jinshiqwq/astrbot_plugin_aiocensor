@@ -35,6 +35,7 @@ class AIOCensor(Star):
         os.makedirs(data_path, exist_ok=True)
         self.db_mgr = DBManager(os.path.join(data_path, "censor.db"))
 
+        # 存储 (group_id_str, user_id_int) -> expiry_ts
         self.new_member_watchlist: dict[tuple[str, int], int] = {}
 
     async def initialize(self):
@@ -56,6 +57,14 @@ class AIOCensor(Star):
             "interval",
             minutes=5,
             id="update_censors",
+            misfire_grace_time=60,
+        )
+        # 设置定时任务，每 5 分钟清理过期的新成员监听条目
+        self.scheduler.add_job(
+            self._cleanup_watchlist,
+            "interval",
+            minutes=5,
+            id="cleanup_watchlist",
             misfire_grace_time=60,
         )
         self.scheduler.start()
@@ -88,6 +97,14 @@ class AIOCensor(Star):
             logger.debug("审查器数据已更新")
         except Exception as e:
             logger.error(f"更新审查器数据失败: {e!s}")
+
+    async def _cleanup_watchlist(self):
+        """定时清理过期的新成员监听条目"""
+        now = int(time.time())
+        items = list(self.new_member_watchlist.items()) 
+        remove_keys = [k for k, ts in items if ts <= now]
+        for k in remove_keys:
+            self.new_member_watchlist.pop(k, None)
 
     async def _handle_aiocqhttp_group_message(
         self, event: AstrMessageEvent, res: CensorResult
