@@ -73,7 +73,7 @@ Astrbot 综合内容安全+群管插件。
 #### 腾讯内容安全（文本、图片链接、图片base64）
 
 > [!note]
-> 暂不支持Biztype。预计在0.1.3前支持.
+> 暂不支持Biztype。
 
 ![image](https://github.com/user-attachments/assets/52e57412-47fd-480a-b799-d42cc17e26ac)
 
