@@ -35,8 +35,8 @@ class AIOCensor(Star):
         os.makedirs(data_path, exist_ok=True)
         self.db_mgr = DBManager(os.path.join(data_path, "censor.db"))
 
-        # 存储 (group_id_str, user_id_int) -> expiry_ts
-        self.new_member_watchlist: dict[tuple[str, int], int] = {}
+        # 存储 (group_id_str, user_id_str) -> expiry_ts
+        self.new_member_watchlist: dict[tuple[str, str], int] = {}
 
     async def initialize(self):
         logger.debug("初始化 AIOCensor 组件")
@@ -213,7 +213,7 @@ class AIOCensor(Star):
         post_type = raw_message.get("post_type")
         if post_type == "notice" and raw_message.get("notice_type") == "group_increase":
             group_id = str(raw_message.get("group_id", ""))
-            user_id = int(raw_message.get("user_id", 0))
+            user_id = str(raw_message.get("user_id", ""))
             # 群组白名单判断
             group_list = self.config.get("group_list", [])
             if group_list and group_id not in group_list:
@@ -231,7 +231,7 @@ class AIOCensor(Star):
             return
 
         # 新成员短期审查：如果发送者在监听表且未过期，则强制审查
-        sender_key = (str(group_id), int(event.get_sender_id()))
+        sender_key = (group_id, event.get_sender_id())
         should_run = False
         expiry = self.new_member_watchlist.get(sender_key)
         now_ts = int(time.time())
