@@ -1,5 +1,6 @@
 import os
 import secrets
+import time
 from multiprocessing import Process
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler  # type:ignore
@@ -34,6 +35,9 @@ class AIOCensor(Star):
         os.makedirs(data_path, exist_ok=True)
         self.db_mgr = DBManager(os.path.join(data_path, "censor.db"))
 
+        # 存储 (group_id_str, user_id_str) -> expiry_ts
+        self.new_member_watchlist: dict[tuple[str, str], int] = {}
+
     async def initialize(self):
         logger.debug("初始化 AIOCensor 组件")
         # 生成 Web UI 密钥（如果未设置）
@@ -53,6 +57,14 @@ class AIOCensor(Star):
             "interval",
             minutes=5,
             id="update_censors",
+            misfire_grace_time=60,
+        )
+        # 设置定时任务，每 5 分钟清理过期的新成员监听条目
+        self.scheduler.add_job(
+            self._cleanup_watchlist,
+            "interval",
+            minutes=5,
+            id="cleanup_watchlist",
             misfire_grace_time=60,
         )
         self.scheduler.start()
@@ -86,6 +98,14 @@ class AIOCensor(Star):
         except Exception as e:
             logger.error(f"更新审查器数据失败: {e!s}")
 
+    async def _cleanup_watchlist(self):
+        """定时清理过期的新成员监听条目"""
+        now = int(time.time())
+        items = list(self.new_member_watchlist.items()) 
+        remove_keys = [k for k, ts in items if ts <= now]
+        for k in remove_keys:
+            self.new_member_watchlist.pop(k, None)
+
     async def _handle_aiocqhttp_group_message(
         self, event: AstrMessageEvent, res: CensorResult
     ):
@@ -113,7 +133,7 @@ class AIOCensor(Star):
 
         if (
             res.risk_level == RiskLevel.Block
-            and self.config.get("enable_group_msg_censor")
+            and (self.config.get("enable_group_msg_censor") or self.config.get("enable_review_new_members"))
             and await admin_check(user_id, group_id, self_id, event.bot)
         ):
             try:
@@ -184,14 +204,48 @@ class AIOCensor(Star):
         ):
             await self.handle_message(event, event.message_obj.message)
 
+    @filter.event_message_type(EventMessageType.ALL)
+    async def handle_group_increase_for_review(self, event: AstrMessageEvent):
+        """检测 aiocqhttp 的 group_increase 通知并将新成员加入短期审查监听表"""
+        if not self.config.get("enable_review_new_members"):
+            return
+        raw_message = event.message_obj.raw_message
+        post_type = raw_message.get("post_type")
+        if post_type == "notice" and raw_message.get("notice_type") == "group_increase":
+            group_id = str(raw_message.get("group_id", ""))
+            user_id = str(raw_message.get("user_id", ""))
+            # 群组白名单判断
+            group_list = self.config.get("group_list", [])
+            if group_list and group_id not in group_list:
+                return
+            expiry_ts = int(time.time()) + int(self.config.get("review_new_members_duration", 300))
+            self.new_member_watchlist[(group_id, user_id)] = expiry_ts
+            logger.info(f"已将新成员{user_id}在群{group_id}登记为短期审查，直到{expiry_ts}")
+
     @filter.event_message_type(EventMessageType.GROUP_MESSAGE)
     async def group_censor(self, event: AstrMessageEvent):
         """群消息审查"""
-        if not self.config.get("enable_group_msg_censor"):
-            return
         group_list = self.config.get("group_list", [])
-        if group_list and event.get_group_id() not in group_list:
+        group_id = event.get_group_id()
+        if group_list and group_id not in group_list:
             return
+
+        # 新成员短期审查：如果发送者在监听表且未过期，则强制审查
+        sender_key = (group_id, event.get_sender_id())
+        should_run = False
+        expiry = self.new_member_watchlist.get(sender_key)
+        now_ts = int(time.time())
+        if self.config.get("enable_review_new_members") and expiry and expiry > now_ts:
+            # 在审查期内
+            should_run = True
+        elif expiry and expiry <= now_ts:
+            # 已过期，清理
+            self.new_member_watchlist.pop(sender_key, None)
+
+        # 若既不在短期审查期，也未启用常规群消息审查，则直接返回
+        if not should_run and not self.config.get("enable_group_msg_censor"):
+            return
+
         await self.handle_message(event, event.message_obj.message)
 
     @filter.event_message_type(EventMessageType.PRIVATE_MESSAGE)
