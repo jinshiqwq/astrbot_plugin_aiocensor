@@ -216,7 +216,8 @@ class AIOCensor(Star):
             user_id = str(raw_message.get("user_id", ""))
             # 群组白名单判断
             group_list = self.config.get("group_list", [])
-            if group_list and group_id not in group_list:
+            group_list_str = [str(g) for g in group_list]
+            if group_list and str(group_id) not in group_list_str:
                 return
             expiry_ts = int(time.time()) + int(self.config.get("review_new_members_duration", 300))
             self.new_member_watchlist[(group_id, user_id)] = expiry_ts
@@ -227,7 +228,8 @@ class AIOCensor(Star):
         """群消息审查"""
         group_list = self.config.get("group_list", [])
         group_id = event.get_group_id()
-        if group_list and group_id not in group_list:
+        group_list_str = [str(g) for g in group_list]
+        if group_list and str(group_id) not in group_list_str:
             return
 
         # 新成员短期审查：如果发送者在监听表且未过期，则强制审查
