@@ -20,7 +20,7 @@ from .webui import run_server  # type:ignore
 
 
 @register(
-    "astrbot_plugin_aiocensor", "Raven95676", "Astrbot综合内容安全+群管插件", "v0.1.3"
+    "astrbot_plugin_aiocensor", "Raven95676", "Astrbot综合内容安全+群管插件", "v0.1.4"
 )
 class AIOCensor(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
