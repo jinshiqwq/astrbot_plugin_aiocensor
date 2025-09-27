@@ -17,11 +17,9 @@ class BlacklistMixin:
         Raises:
             DBError: 数据库未初始化或创建表失败。
         """
-        if not self._db:
-            raise DBError("数据库未初始化")
         try:
-            with self._db:
-                self._db.execute("""
+            with self._locked_db() as db:
+                db.execute("""
                 CREATE TABLE IF NOT EXISTS blacklist (
                     id TEXT PRIMARY KEY,
                     identifier TEXT UNIQUE NOT NULL,
@@ -45,13 +43,11 @@ class BlacklistMixin:
         Raises:
             DBError: 数据库未初始化或添加条目失败。
         """
-        if not self._db:
-            raise DBError("数据库未初始化或连接已关闭")
         entry_id = str(uuid.uuid4())
         current_time = int(time.time())
         try:
-            with self._db:
-                cursor = self._db.cursor()
+            with self._locked_db() as db:
+                cursor = db.cursor()
                 cursor.execute(
                     "INSERT INTO blacklist (id, identifier, reason, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(identifier) DO UPDATE SET reason = ?, updated_at = ? RETURNING id",
                     (entry_id, identifier, reason, current_time, reason, current_time),
@@ -77,11 +73,9 @@ class BlacklistMixin:
         Raises:
             DBError: 数据库未初始化或获取条目失败。
         """
-        if not self._db:
-            raise DBError("数据库未初始化或连接已关闭")
         try:
-            with self._db:
-                cursor = self._db.execute(
+            with self._locked_db() as db:
+                cursor = db.execute(
                     "SELECT id, identifier, reason, updated_at FROM blacklist ORDER BY updated_at DESC LIMIT ? OFFSET ?",
                     (limit, offset),
                 )
@@ -95,7 +89,7 @@ class BlacklistMixin:
         except sqlite3.Error as e:
             raise DBError(f"获取黑名单条目失败：{e!s}")
 
-    def get_blacklist_entries_count(self) -> int:
+    def get_blacklist_entries_count(self, search_term: str | None = None) -> int:
         """
         获取黑名单条目的总数。
 
@@ -105,11 +99,16 @@ class BlacklistMixin:
         Raises:
             DBError: 数据库未初始化或获取条目总数失败。
         """
-        if not self._db:
-            raise DBError("数据库未初始化或连接已关闭")
         try:
-            with self._db:
-                cursor = self._db.execute("SELECT COUNT(*) FROM blacklist")
+            if search_term:
+                query = "SELECT COUNT(*) FROM blacklist WHERE identifier LIKE ? OR IFNULL(reason, '') LIKE ?"
+                pattern = f"%{search_term}%"
+                params = (pattern, pattern)
+            else:
+                query = "SELECT COUNT(*) FROM blacklist"
+                params = ()
+            with self._locked_db() as db:
+                cursor = db.execute(query, params)
                 result = cursor.fetchone()
                 return result[0] if result else 0
         except sqlite3.Error as e:
@@ -132,12 +131,10 @@ class BlacklistMixin:
         Raises:
             DBError: 数据库未初始化或搜索条目失败。
         """
-        if not self._db:
-            raise DBError("数据库未初始化或连接已关闭")
         search_pattern = f"%{search_term}%"
         try:
-            with self._db:
-                cursor = self._db.execute(
+            with self._locked_db() as db:
+                cursor = db.execute(
                     "SELECT id, identifier, reason, updated_at FROM blacklist WHERE identifier LIKE ? OR reason LIKE ? ORDER BY updated_at DESC LIMIT ? OFFSET ?",
                     (search_pattern, search_pattern, limit, offset),
                 )
@@ -164,11 +161,9 @@ class BlacklistMixin:
         Raises:
             DBError: 数据库未初始化或删除条目失败。
         """
-        if not self._db:
-            raise DBError("数据库未初始化或连接已关闭")
         try:
-            with self._db:
-                cursor = self._db.cursor()
+            with self._locked_db() as db:
+                cursor = db.cursor()
                 cursor.execute("DELETE FROM blacklist WHERE id = ?", (entry_id,))
                 deleted = cursor.rowcount > 0
                 return deleted

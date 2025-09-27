@@ -17,11 +17,9 @@ class SensitiveWordMixin:
         Raises:
             DBError: 数据库未初始化或创建表失败。
         """
-        if not self._db:
-            raise DBError("数据库未初始化")
         try:
-            with self._db:
-                self._db.execute("""
+            with self._locked_db() as db:
+                db.execute("""
                 CREATE TABLE IF NOT EXISTS sensitive_words (
                     id TEXT PRIMARY KEY,
                     word TEXT UNIQUE NOT NULL,
@@ -43,13 +41,11 @@ class SensitiveWordMixin:
         Raises:
             DBError: 数据库未初始化或添加敏感词失败。
         """
-        if not self._db:
-            raise DBError("数据库未初始化或连接已关闭")
         word_id = str(uuid.uuid4())
         current_time = int(time.time())
         try:
-            with self._db:
-                cursor = self._db.cursor()
+            with self._locked_db() as db:
+                cursor = db.cursor()
                 cursor.execute(
                     "INSERT INTO sensitive_words (id, word, updated_at) VALUES (?, ?, ?) ON CONFLICT(word) DO UPDATE SET updated_at = ? RETURNING id",
                     (word_id, word, current_time, current_time),
@@ -60,7 +56,10 @@ class SensitiveWordMixin:
             raise DBError(f"添加敏感词失败：{e!s}")
 
     def get_sensitive_words(
-        self, limit: int = 100, offset: int = 0
+        self,
+        search_term: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
     ) -> list[SensitiveWordEntry]:
         """
         获取敏感词列表。
@@ -75,14 +74,16 @@ class SensitiveWordMixin:
         Raises:
             DBError: 数据库未初始化或获取敏感词失败。
         """
-        if not self._db:
-            raise DBError("数据库未初始化或连接已关闭")
         try:
-            with self._db:
-                cursor = self._db.execute(
-                    "SELECT id, word, updated_at FROM sensitive_words ORDER BY word LIMIT ? OFFSET ?",
-                    (limit, offset),
-                )
+            query = "SELECT id, word, updated_at FROM sensitive_words"
+            params: list[object] = []
+            if search_term:
+                query += " WHERE word LIKE ?"
+                params.append(f"%{search_term}%")
+            query += " ORDER BY word LIMIT ? OFFSET ?"
+            params.extend([limit, offset])
+            with self._locked_db() as db:
+                cursor = db.execute(query, params)
                 rows = cursor.fetchall()
                 return [
                     SensitiveWordEntry(id=row[0], word=row[1], updated_at=row[2])
@@ -91,7 +92,7 @@ class SensitiveWordMixin:
         except sqlite3.Error as e:
             raise DBError(f"获取敏感词失败：{e!s}")
 
-    def get_sensitive_words_count(self) -> int:
+    def get_sensitive_words_count(self, search_term: str | None = None) -> int:
         """
         获取敏感词的总数。
 
@@ -101,11 +102,15 @@ class SensitiveWordMixin:
         Raises:
             DBError: 数据库未初始化或获取敏感词总数失败。
         """
-        if not self._db:
-            raise DBError("数据库未初始化或连接已关闭")
         try:
-            with self._db:
-                cursor = self._db.execute("SELECT COUNT(*) FROM sensitive_words")
+            if search_term:
+                query = "SELECT COUNT(*) FROM sensitive_words WHERE word LIKE ?"
+                params = (f"%{search_term}%",)
+            else:
+                query = "SELECT COUNT(*) FROM sensitive_words"
+                params = ()
+            with self._locked_db() as db:
+                cursor = db.execute(query, params)
                 result = cursor.fetchone()
                 return result[0] if result else 0
         except sqlite3.Error as e:
@@ -124,11 +129,9 @@ class SensitiveWordMixin:
         Raises:
             DBError: 数据库未初始化或删除敏感词失败。
         """
-        if not self._db:
-            raise DBError("数据库未初始化或连接已关闭")
         try:
-            with self._db:
-                cursor = self._db.cursor()
+            with self._locked_db() as db:
+                cursor = db.cursor()
                 cursor.execute("DELETE FROM sensitive_words WHERE id = ?", (word_id,))
                 deleted = cursor.rowcount > 0
                 return deleted

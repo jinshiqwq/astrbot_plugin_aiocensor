@@ -1,7 +1,12 @@
+import asyncio
 import os
 import secrets
 import time
-from multiprocessing import Process
+from asyncio import Lock
+from contextlib import suppress
+from multiprocessing import Process, get_context
+from multiprocessing.queues import Queue as MPQueue
+from typing import Any, Callable
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler  # type:ignore
 
@@ -28,6 +33,11 @@ class AIOCensor(Star):
         self.config = config
         self.web_ui_process: Process | None = None
         self.scheduler: AsyncIOScheduler | None = None
+        self._mp_ctx = get_context("spawn")
+        self._notification_queue: MPQueue | None = None
+        self._notification_task: asyncio.Task | None = None
+        self._update_lock: Lock | None = None
+        self._pending_update = False
 
         # 初始化内容审查流
         self.censor_flow = CensorFlow(config)
@@ -47,18 +57,13 @@ class AIOCensor(Star):
 
         # 初始化数据库和审查器
         self.db_mgr.initialize()
+        self._update_lock = asyncio.Lock()
+        self._notification_queue = self._mp_ctx.Queue()
+        self._notification_task = asyncio.create_task(self._consume_notifications())
 
         await self._update_censors()
 
-        # 设置定时任务，每 5 分钟更新审查器数据
         self.scheduler = AsyncIOScheduler(timezone="Asia/Shanghai")
-        self.scheduler.add_job(
-            self._update_censors,
-            "interval",
-            minutes=5,
-            id="update_censors",
-            misfire_grace_time=60,
-        )
         # 设置定时任务，每 5 分钟清理过期的新成员监听条目
         self.scheduler.add_job(
             self._cleanup_watchlist,
@@ -70,38 +75,101 @@ class AIOCensor(Star):
         self.scheduler.start()
 
         # 启动 Web UI 服务
-        self.web_ui_process = Process(
+        self.web_ui_process = self._mp_ctx.Process(
             target=run_server,
             args=(
                 self.config["webui"]["secret"],
                 self.config["webui"]["password"],
                 self.config["webui"].get("host", "0.0.0.0"),
                 self.config["webui"].get("port", 9966),
+                self._notification_queue,
             ),
             daemon=True,
         )
         self.web_ui_process.start()
 
     async def _update_censors(self):
-        """定期更新审查器数据"""
-        try:
-            black_list = self.db_mgr.get_blacklist_entries()
-            await self.censor_flow.userid_censor.build(
-                {entry.identifier for entry in black_list}
+        """刷新审查器数据到最新状态"""
+        if not self._update_lock:
+            self._update_lock = asyncio.Lock()
+
+        if self._update_lock.locked():
+            self._pending_update = True
+            return
+
+        while True:
+            async with self._update_lock:
+                try:
+
+                    def _collect(
+                        fetch: Callable[[int, int], list[Any]],
+                    ) -> list[Any]:
+                        offset = 0
+                        page_size = 500
+                        items: list[Any] = []
+                        while True:
+                            chunk = fetch(page_size, offset)
+                            if not chunk:
+                                break
+                            items.extend(chunk)
+                            if len(chunk) < page_size:
+                                break
+                            offset += page_size
+                        return items
+
+                    black_list = _collect(
+                        lambda limit, offset: self.db_mgr.get_blacklist_entries(
+                            limit=limit, offset=offset
+                        )
+                    )
+                    await self.censor_flow.userid_censor.build({
+                        entry.identifier for entry in black_list
+                    })
+                    if hasattr(self.censor_flow.text_censor, "build"):
+                        sensitive_words = _collect(
+                            lambda limit, offset: self.db_mgr.get_sensitive_words(
+                                limit=limit, offset=offset
+                            )
+                        )
+                        await self.censor_flow.text_censor.build({
+                            entry.word for entry in sensitive_words
+                        })
+                    logger.debug("审查器数据已更新")
+                except Exception as e:
+                    logger.error(f"更新审查器数据失败: {e!s}")
+            if self._pending_update:
+                self._pending_update = False
+                continue
+            break
+
+    async def _consume_notifications(self) -> None:
+        """处理 WebUI 进程发来的数据更新事件"""
+        if not self._notification_queue:
+            return
+        while True:
+            try:
+                message: Any = await asyncio.to_thread(self._notification_queue.get)
+            except asyncio.CancelledError:
+                break
+            except (EOFError, OSError):
+                logger.debug("通知队列已关闭，停止监听")
+                break
+            if not message:
+                continue
+            event_type = (
+                message.get("type") if isinstance(message, dict) else str(message)
             )
-            if hasattr(self.censor_flow.text_censor, "build"):
-                sensitive_words = self.db_mgr.get_sensitive_words()
-                await self.censor_flow.text_censor.build(
-                    {entry.word for entry in sensitive_words}
-                )
-            logger.debug("审查器数据已更新")
-        except Exception as e:
-            logger.error(f"更新审查器数据失败: {e!s}")
+            if event_type == "shutdown":
+                break
+            if event_type in {"blacklist_updated", "sensitive_words_updated"}:
+                await self._update_censors()
+            else:
+                logger.debug(f"忽略未知的通知事件: {event_type}")
 
     async def _cleanup_watchlist(self):
         """定时清理过期的新成员监听条目"""
         now = int(time.time())
-        items = list(self.new_member_watchlist.items()) 
+        items = list(self.new_member_watchlist.items())
         remove_keys = [k for k, ts in items if ts <= now]
         for k in remove_keys:
             self.new_member_watchlist.pop(k, None)
@@ -122,18 +190,19 @@ class AIOCensor(Star):
         self_id = int(event.get_self_id())
         message_id = int(event.message_obj.message_id)
 
-        res.extra.update(
-            {
-                "group_id": group_id,
-                "user_id": user_id,
-                "self_id": self_id,
-                "message_id": message_id,
-            }
-        )
+        res.extra.update({
+            "group_id": group_id,
+            "user_id": user_id,
+            "self_id": self_id,
+            "message_id": message_id,
+        })
 
         if (
             res.risk_level == RiskLevel.Block
-            and (self.config.get("enable_group_msg_censor") or self.config.get("enable_review_new_members"))
+            and (
+                self.config.get("enable_group_msg_censor")
+                or self.config.get("enable_review_new_members")
+            )
             and await admin_check(user_id, group_id, self_id, event.bot)
         ):
             try:
@@ -219,9 +288,13 @@ class AIOCensor(Star):
             group_list_str = [str(g) for g in group_list]
             if group_list and str(group_id) not in group_list_str:
                 return
-            expiry_ts = int(time.time()) + int(self.config.get("review_new_members_duration", 300))
+            expiry_ts = int(time.time()) + int(
+                self.config.get("review_new_members_duration", 300)
+            )
             self.new_member_watchlist[(group_id, user_id)] = expiry_ts
-            logger.info(f"已将新成员{user_id}在群{group_id}登记为短期审查，直到{expiry_ts}")
+            logger.info(
+                f"已将新成员{user_id}在群{group_id}登记为短期审查，直到{expiry_ts}"
+            )
 
     @filter.event_message_type(EventMessageType.GROUP_MESSAGE)
     async def group_censor(self, event: AstrMessageEvent):
@@ -283,6 +356,21 @@ class AIOCensor(Star):
     async def terminate(self):
         logger.debug("开始清理 AIOCensor 资源...")
         try:
+            if self._notification_queue:
+                try:
+                    self._notification_queue.put_nowait({"type": "shutdown"})
+                except Exception:
+                    pass
+            if self._notification_task:
+                with suppress(asyncio.CancelledError):
+                    await self._notification_task
+            if self._notification_queue:
+                try:
+                    self._notification_queue.close()
+                    self._notification_queue.join_thread()
+                except Exception:
+                    pass
+                self._notification_queue = None
             self.db_mgr.close()
             await self.censor_flow.close()
             if self.scheduler:

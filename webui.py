@@ -3,6 +3,7 @@ import os
 import atexit
 from datetime import datetime, timedelta, timezone
 from functools import wraps
+from multiprocessing.queues import Queue as MPQueue
 from typing import Any
 
 import jwt
@@ -22,6 +23,7 @@ class WebUIServer:
         self,
         password: str,
         secret_key: str,
+        notification_queue: MPQueue | None = None,
     ):
         data_path = os.path.join(os.getcwd(), "data", "aiocensor")
         if not os.path.exists(data_path):
@@ -33,8 +35,23 @@ class WebUIServer:
         self._app = Quart(__name__, static_folder="static", static_url_path="")
         self._password = password
         self._secret_key = secret_key
+        self._notification_queue = notification_queue
         self._server_task: asyncio.Task | None = None
         self._setup_app()
+
+    def _notify_change(
+        self, event_type: str, payload: dict[str, Any] | None = None
+    ) -> None:
+        """向主进程发送数据更新通知。"""
+        if not self._notification_queue:
+            return
+        message: dict[str, Any] = {"type": event_type}
+        if payload:
+            message["payload"] = payload
+        try:
+            self._notification_queue.put_nowait(message)
+        except Exception as exc:
+            logger.warning(f"发送更新通知失败: {exc!s}")
 
     def _setup_app(self):
         """配置Quart应用实例"""
@@ -184,18 +201,12 @@ class WebUIServer:
                 offset = int(args.get("offset", 0))
                 search = args.get("search")
 
-                if search:
-                    logs = self._db_mgr.get_audit_logs(
-                        search_term=search,
-                        limit=limit,
-                        offset=offset,
-                    )
-                    total = self._db_mgr.get_audit_logs_count()
-                else:
-                    logs = self._db_mgr.get_audit_logs(
-                        limit=limit, offset=offset
-                    )
-                    total = self._db_mgr.get_audit_logs_count()
+                logs = self._db_mgr.get_audit_logs(
+                    search_term=search,
+                    limit=limit,
+                    offset=offset,
+                )
+                total = self._db_mgr.get_audit_logs_count(search_term=search)
 
                 return await format_response(
                     data={
@@ -203,7 +214,11 @@ class WebUIServer:
                             {
                                 "id": log.id,
                                 "content": log.result.message.content,
-                                "user_id": log.result.extra["user_id_str"],
+                                "user_id": (
+                                    log.result.extra.get("user_id_str")
+                                    if log.result.extra
+                                    else ""
+                                ),
                                 "source": log.result.message.source,
                                 "systemJudgment": log.result.risk_level.name,
                                 "reason": str(log.result.reason),
@@ -255,17 +270,22 @@ class WebUIServer:
                             continue
 
                         self._db_mgr.add_blacklist_entry(user_id, reason)
+                        self._notify_change(
+                            "blacklist_updated", {"user_id": user_id, "reason": reason}
+                        )
                     elif action == "dispose":
                         return await format_response(
-                            message="功能未实现", status_code=400 #TODO:实现控制台处置
+                            message="功能未实现",
+                            status_code=400,  # TODO:实现控制台处置
                         )
                     else:
                         return await format_response(
                             message="无效的操作", status_code=400
                         )
+                self._notify_change("audit_log_updated", {"log_id": log_id})
                 return await format_response(message="处置成功", status_code=200)
             except Exception as e:
-                logger.error(f"处置失败 {log_id}: {e!s}",exc_info=True)
+                logger.error(f"处置失败 {log_id}: {e!s}", exc_info=True)
                 return await format_response(message="处置失败", status_code=500)
 
         @self._app.route("/api/audit-logs/<string:log_id>/ignore", methods=["POST"])
@@ -275,9 +295,8 @@ class WebUIServer:
             try:
                 log_id = clean_input(log_id)
                 if not self._db_mgr.delete_audit_log(log_id):
-                    return await format_response(
-                        message="日志不存在", status_code=404
-                    )
+                    return await format_response(message="日志不存在", status_code=404)
+                self._notify_change("audit_log_updated", {"log_id": log_id})
                 return await format_response(
                     message="已删除日志", data={"log_id": log_id}
                 )
@@ -296,11 +315,14 @@ class WebUIServer:
                 search = args.get("search")
 
                 if search:
-                    entries = self._db_mgr.search_blacklist(search, limit=limit, offset=offset)
-                    total = len(self._db_mgr.search_blacklist(search))
+                    entries = self._db_mgr.search_blacklist(
+                        search, limit=limit, offset=offset
+                    )
                 else:
-                    entries = self._db_mgr.get_blacklist_entries(limit=limit, offset=offset)
-                    total = self._db_mgr.get_blacklist_entries_count()
+                    entries = self._db_mgr.get_blacklist_entries(
+                        limit=limit, offset=offset
+                    )
+                total = self._db_mgr.get_blacklist_entries_count(search)
 
                 return await format_response(
                     data={
@@ -348,6 +370,9 @@ class WebUIServer:
                     )
 
                 record_id = self._db_mgr.add_blacklist_entry(user_id, reason)
+                self._notify_change(
+                    "blacklist_updated", {"user_id": user_id, "reason": reason}
+                )
                 return await format_response(
                     data={"id": record_id, "user": user_id, "reason": reason},
                     message="已添加至黑名单",
@@ -367,6 +392,7 @@ class WebUIServer:
                     return await format_response(
                         message="黑名单记录不存在", status_code=404
                     )
+                self._notify_change("blacklist_updated", {"record_id": record_id})
                 return await format_response(
                     data={"record_id": record_id}, message="已移出黑名单"
                 )
@@ -384,16 +410,10 @@ class WebUIServer:
                 offset = int(args.get("offset", 0))
                 search = args.get("search")
 
-                if search:
-                    words = self._db_mgr.get_sensitive_words(
-                        search, limit=limit, offset=offset
-                    )
-                    total = len(self._db_mgr.get_sensitive_words(search))
-                else:
-                    words = self._db_mgr.get_sensitive_words(
-                        limit=limit, offset=offset
-                    )
-                    total = self._db_mgr.get_sensitive_words_count()
+                words = self._db_mgr.get_sensitive_words(
+                    search_term=search, limit=limit, offset=offset
+                )
+                total = self._db_mgr.get_sensitive_words_count(search)
 
                 return await format_response(
                     data={
@@ -431,13 +451,14 @@ class WebUIServer:
                         message="缺少敏感词内容", status_code=400
                     )
 
-                existing = self._db_mgr.get_sensitive_words(word)
+                existing = self._db_mgr.get_sensitive_words(word, limit=1)
                 if any(entry.word == word for entry in existing):
                     return await format_response(
                         message="敏感词已存在", status_code=409
                     )
 
                 word_id = self._db_mgr.add_sensitive_word(word)
+                self._notify_change("sensitive_words_updated", {"word": word})
                 return await format_response(
                     data={"id": word_id, "word": word},
                     message="敏感词添加成功",
@@ -457,6 +478,7 @@ class WebUIServer:
                     return await format_response(
                         message="敏感词不存在", status_code=404
                     )
+                self._notify_change("sensitive_words_updated", {"word_id": word_id})
                 return await format_response(
                     data={"word_id": word_id}, message="敏感词删除成功"
                 )
@@ -493,7 +515,13 @@ class WebUIServer:
                 pass
 
 
-def run_server(secret_key: str, password: str, host: str, port: int):
+def run_server(
+    secret_key: str,
+    password: str,
+    host: str,
+    port: int,
+    notification_queue: MPQueue | None = None,
+):
     """子进程入口"""
-    server = WebUIServer(password, secret_key)
+    server = WebUIServer(password, secret_key, notification_queue)
     asyncio.run(server.start(host, port))

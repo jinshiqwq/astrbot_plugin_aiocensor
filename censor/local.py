@@ -23,7 +23,7 @@ class LocalCensor(CensorBase):
 
     def __init__(self, config: dict[str, Any]) -> None:
         self._config = config
-        self._patterns = config.get("patterns", set())
+        self._patterns: set[str] = set(config.get("patterns", set()))
         self._matcher = AhoMatcher(use_logic=config.get("use_logic", True))
         self._is_built = asyncio.Event()
         self._max_workers = 1
@@ -36,20 +36,29 @@ class LocalCensor(CensorBase):
         return self
 
     async def build(self, patterns: set[str]) -> None:
+        new_patterns = set(patterns)
         async with self._lock:
             if self._shutdown.is_set():
                 await self._reinitialize()
 
-            if self._is_built.is_set():
+            if self._is_built.is_set() and new_patterns == self._patterns:
                 return
+
+            self._patterns = new_patterns
 
             try:
                 if not self._executor or self._executor._shutdown:
                     self._executor = ThreadPoolExecutor(max_workers=self._max_workers)
 
-                loop = asyncio.get_event_loop()
+                if self._is_built.is_set():
+                    self._matcher = AhoMatcher(
+                        use_logic=self._config.get("use_logic", True)
+                    )
+                    self._is_built.clear()
+
+                loop = asyncio.get_running_loop()
                 await loop.run_in_executor(
-                    self._executor, lambda: self._matcher.build(patterns)
+                    self._executor, lambda: self._matcher.build(self._patterns)
                 )
                 self._is_built.set()
             except ValueError as e:

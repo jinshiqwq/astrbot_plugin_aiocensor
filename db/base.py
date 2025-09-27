@@ -1,5 +1,8 @@
 import atexit
 import sqlite3
+import threading
+from contextlib import contextmanager
+from typing import Iterator
 
 from ..common.types import DBError  # type: ignore
 
@@ -16,6 +19,7 @@ class BaseDBMixin:
         """
         self._db_path: str = db_path
         self._db: sqlite3.Connection | None = None
+        self._lock = threading.RLock()
         # fallback
         atexit.register(self.close)
 
@@ -42,26 +46,37 @@ class BaseDBMixin:
 
     def initialize(self) -> None:
         """初始化数据库连接和表结构。"""
-        try:
-            self._db = sqlite3.connect(self._db_path)
-            self._db.execute("PRAGMA foreign_keys = ON")
-            self._db.execute("PRAGMA journal_mode = WAL")
-            results = self._db.execute("PRAGMA integrity_check").fetchone()
-            for result in results:
-                if result != "ok":
-                    raise DBError(f"数据库完整性检查失败: {result[0]}")
-            self._create_tables()
+        with self._lock:
+            if self._db is not None:
+                return
+            try:
+                self._db = sqlite3.connect(
+                    self._db_path,
+                    timeout=30.0,
+                    check_same_thread=False,
+                )
+                self._db.execute("PRAGMA foreign_keys = ON")
+                self._db.execute("PRAGMA journal_mode = WAL")
+                self._db.execute("PRAGMA synchronous = NORMAL")
+                self._db.execute("PRAGMA busy_timeout = 5000")
+                self._db.execute("PRAGMA temp_store = MEMORY")
+                result = self._db.execute("PRAGMA integrity_check").fetchone()
+                if not result or result[0] != "ok":
+                    raise DBError(
+                        f"数据库完整性检查失败: {result[0] if result else 'unknown'}"
+                    )
+                self._create_tables()
 
-        except sqlite3.Error as e:
-            if self._db:
-                self._db.close()
-                self._db = None
-            raise DBError(f"无法连接到数据库: {e!s}")
-        except Exception as e:
-            if self._db:
-                self._db.close()
-                self._db = None
-            raise DBError(f"初始化数据库失败: {e!s}")
+            except sqlite3.Error as e:
+                if self._db:
+                    self._db.close()
+                    self._db = None
+                raise DBError(f"无法连接到数据库: {e!s}")
+            except Exception as e:
+                if self._db:
+                    self._db.close()
+                    self._db = None
+                raise DBError(f"初始化数据库失败: {e!s}")
 
     def _create_tables(self):
         """
@@ -74,11 +89,33 @@ class BaseDBMixin:
 
     def close(self) -> None:
         """关闭数据库连接。"""
-        if self._db is not None:
+        with self._lock:
+            if self._db is not None:
+                try:
+                    self._db.execute("PRAGMA wal_checkpoint")
+                    self._db.close()
+                except sqlite3.Error as e:
+                    raise DBError(f"关闭数据库连接失败：{e!s}")
+                finally:
+                    self._db = None
+
+    @contextmanager
+    def _locked_db(self) -> Iterator[sqlite3.Connection]:
+        """获取带锁的数据库连接，确保线程/进程安全。"""
+        if not self._db:
+            raise DBError("数据库未初始化或连接已关闭")
+        with self._lock:
             try:
-                self._db.execute("PRAGMA wal_checkpoint")
-                self._db.close()
+                yield self._db
+                self._db.commit()
+            except sqlite3.OperationalError as e:
+                self._db.rollback()
+                if "locked" in str(e).lower():
+                    raise DBError("数据库繁忙，请稍后重试") from e
+                raise DBError(f"数据库操作失败：{e!s}") from e
             except sqlite3.Error as e:
-                raise DBError(f"关闭数据库连接失败：{e!s}")
-            finally:
-                self._db = None
+                self._db.rollback()
+                raise DBError(f"数据库操作失败：{e!s}") from e
+            except Exception:
+                self._db.rollback()
+                raise

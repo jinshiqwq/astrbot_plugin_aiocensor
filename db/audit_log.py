@@ -22,11 +22,9 @@ class AuditLogMixin:
         创建审计日志表及其索引。
         如果表或索引已存在，则不会重复创建。
         """
-        if not self._db:
-            raise DBError("数据库未初始化")
         try:
-            with self._db:
-                self._db.execute("""
+            with self._locked_db() as db:
+                db.execute("""
                 CREATE TABLE IF NOT EXISTS audit_logs (
                     id TEXT PRIMARY KEY,
                     content TEXT NOT NULL,
@@ -37,21 +35,19 @@ class AuditLogMixin:
                     result_extra TEXT,
                     entry_extra TEXT
                 )""")
-                self._db.execute(
+                db.execute(
                     "CREATE INDEX IF NOT EXISTS idx_logs_source ON audit_logs(source)"
                 )
-                self._db.execute(
+                db.execute(
                     "CREATE INDEX IF NOT EXISTS idx_logs_time ON audit_logs(message_timestamp)"
                 )
-                self._db.execute(
+                db.execute(
                     "CREATE INDEX IF NOT EXISTS idx_logs_risk ON audit_logs(risk_level)"
                 )
         except sqlite3.Error as e:
             raise DBError(f"创建审计日志表失败: {e!s}")
 
-    def add_audit_log(
-        self, result: CensorResult, extra: dict | None = None
-    ) -> str:
+    def add_audit_log(self, result: CensorResult, extra: dict | None = None) -> str:
         """
         添加一条审计日志记录。
 
@@ -63,16 +59,14 @@ class AuditLogMixin:
         Raises:
             DBError: 数据库未初始化或查询失败。
         """
-        if not self._db:
-            raise DBError("数据库未初始化或连接已关闭")
         log_id = str(uuid.uuid4())
         reason_str = json.dumps(list(result.reason)) if result.reason else ""
         result_extra_str = json.dumps(result.extra) if result.extra else None
         entry_extra_str = json.dumps(extra) if extra else None
 
         try:
-            with self._db:
-                cursor = self._db.cursor()
+            with self._locked_db() as db:
+                cursor = db.cursor()
                 cursor.execute(
                     """
                     INSERT INTO audit_logs
@@ -100,6 +94,7 @@ class AuditLogMixin:
         end_time: int | None = None,
         source: str | None = None,
         risk_level: RiskLevel | None = None,
+        search_term: str | None = None,
     ) -> int:
         """
         获取符合条件的审计日志记录总数。
@@ -116,8 +111,6 @@ class AuditLogMixin:
         Raises:
             DBError: 数据库未初始化或查询失败。
         """
-        if not self._db:
-            raise DBError("数据库未初始化或连接已关闭")
         query = "SELECT COUNT(*) FROM audit_logs WHERE 1=1"
         params: list[Any] = []
         if start_time:
@@ -132,9 +125,13 @@ class AuditLogMixin:
         if risk_level:
             query += " AND risk_level = ?"
             params.append(risk_level.value)
+        if search_term:
+            query += " AND (content LIKE ? OR result_extra LIKE ?)"
+            pattern = f"%{search_term}%"
+            params.extend([pattern, pattern])
         try:
-            with self._db:
-                cursor = self._db.execute(query, params)
+            with self._locked_db() as db:
+                cursor = db.execute(query, params)
                 result = cursor.fetchone()
                 return result[0] if result else 0
         except sqlite3.Error as e:
@@ -146,6 +143,7 @@ class AuditLogMixin:
         end_time: int | None = None,
         source: str | None = None,
         risk_level: RiskLevel | None = None,
+        search_term: str | None = None,
         limit: int = 100,
         offset: int = 0,
     ) -> list[AuditLogEntry]:
@@ -166,8 +164,6 @@ class AuditLogMixin:
         Raises:
             DBError: 数据库未初始化或查询失败。
         """
-        if not self._db:
-            raise DBError("数据库未初始化或连接已关闭")
         query = """
             SELECT id, content, source, message_timestamp, risk_level, reason, result_extra, entry_extra
             FROM audit_logs WHERE 1=1
@@ -185,11 +181,15 @@ class AuditLogMixin:
         if risk_level:
             query += " AND risk_level = ?"
             params.append(risk_level.value)
+        if search_term:
+            query += " AND (content LIKE ? OR result_extra LIKE ?)"
+            pattern = f"%{search_term}%"
+            params.extend([pattern, pattern])
         query += " ORDER BY message_timestamp DESC, id DESC LIMIT ? OFFSET ?"
         params.extend([limit, offset])
         try:
-            with self._db:
-                cursor = self._db.execute(query, params)
+            with self._locked_db() as db:
+                cursor = db.execute(query, params)
                 rows = cursor.fetchall()
                 return [self._parse_audit_log(row) for row in rows]
         except sqlite3.Error as e:
@@ -207,11 +207,9 @@ class AuditLogMixin:
         Raises:
             DBError: 数据库未初始化或删除失败。
         """
-        if not self._db:
-            raise DBError("数据库未初始化或连接已关闭")
         try:
-            with self._db:
-                cursor = self._db.cursor()
+            with self._locked_db() as db:
+                cursor = db.cursor()
                 cursor.execute("DELETE FROM audit_logs WHERE id = ?", (log_id,))
                 deleted = cursor.rowcount > 0
                 return deleted
@@ -231,11 +229,9 @@ class AuditLogMixin:
         Raises:
             DBError: 数据库未初始化或查询失败。
         """
-        if not self._db:
-            raise DBError("数据库未初始化或连接已关闭")
         try:
-            with self._db:
-                cursor = self._db.execute(
+            with self._locked_db() as db:
+                cursor = db.execute(
                     """
                     SELECT id, content, source, message_timestamp, risk_level, reason, result_extra, entry_extra
                     FROM audit_logs WHERE id = ?

@@ -14,16 +14,20 @@ Astrbot 综合内容安全+群管插件。
 ## 兼容的适配器
 
 已测试：
+
 - aiocqhttp
 - telegram
 
 完全兼容（功能包括自动处置）：
+
 - aiocqhttp
 
 部分兼容（功能不包括自动处置）：
+
 - telegram
 
 理论部分兼容：
+
 - lark
 
 ## 特点
@@ -64,11 +68,11 @@ Astrbot 综合内容安全+群管插件。
 
 ![image](https://github.com/user-attachments/assets/d2936efc-5cb8-4855-96a2-238d538d8fe4)
 
-开通地址：https://www.aliyun.com/product/lvwang
+开通地址：<https://www.aliyun.com/product/lvwang>
 
-关于accesskeyID与accesskeySecret：https://help.aliyun.com/zh/ram/user-guide/create-an-accesskey-pair
+关于accesskeyID与accesskeySecret：<https://help.aliyun.com/zh/ram/user-guide/create-an-accesskey-pair>
 
-更多信息请参阅阿里云官方文档：https://help.aliyun.com/document_detail/2525371.html
+更多信息请参阅阿里云官方文档：<https://help.aliyun.com/document_detail/2525371.html>
 
 #### 腾讯内容安全（文本、图片链接、图片base64）
 
@@ -80,10 +84,11 @@ Astrbot 综合内容安全+群管插件。
 ![image](https://github.com/user-attachments/assets/308db025-98e5-4bae-94b4-c58d8e73ac01)
 
 开通地址：
-- https://cloud.tencent.com/product/tms
-- https://cloud.tencent.com/product/ims
 
-请参阅官方文档：https://cloud.tencent.com/document/product/1124/37119
+- <https://cloud.tencent.com/product/tms>
+- <https://cloud.tencent.com/product/ims>
+
+请参阅官方文档：<https://cloud.tencent.com/document/product/1124/37119>
 
 #### 基于OpenAI兼容的LLM审核（文本、图片链接、图片base64）
 
