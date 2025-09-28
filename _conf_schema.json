@@ -133,5 +133,21 @@
     "description": "图片审核提供商",
     "type": "string",
     "options": ["Aliyun", "Tencent", "LLM"]
+  },
+  "forward_violation_message": {
+    "description": "违规消息转发配置",
+    "type": "object",
+    "items": {
+      "enabled": {
+        "description": "启用违规消息转发",
+        "type": "bool",
+        "default": false
+      },
+      "target_umo": {
+        "description": "接收违规消息通知的会话标识 (UMO)",
+        "type": "string",
+        "hint": "请使用sid命令查看UMO"
+      }
+    }
   }
 }

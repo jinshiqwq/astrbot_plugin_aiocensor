@@ -16,6 +16,7 @@ from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.message_components import Image, Json, Plain, Reply
 from astrbot.api.star import Context, Star, register
 from astrbot.core.message.components import BaseMessageComponent
+from astrbot.core.message.message_event_result import MessageChain
 from astrbot.core.provider.entites import LLMResponse
 from astrbot.core.star.filter.event_message_type import EventMessageType
 
@@ -232,24 +233,33 @@ class AIOCensor(Star):
             "message_id": message_id,
         })
 
-        if (
-            res.risk_level == RiskLevel.Block
-            and (
-                self.config.get("enable_group_msg_censor")
-                or self.config.get("enable_review_new_members")
+        disposal_attempted = False
+        disposal_succeeded: bool | None = None
+
+        if res.risk_level == RiskLevel.Block:
+            can_dispose = self.config.get("enable_group_msg_censor") or self.config.get(
+                "enable_review_new_members"
             )
-            and await admin_check(user_id, group_id, self_id, event.bot)
-        ):
-            try:
-                await dispose_msg(
-                    message_id=message_id,
-                    group_id=group_id,
-                    user_id=user_id,
-                    self_id=self_id,
-                    client=event.bot,
-                )
-            except Exception as e:
-                logger.error(f"消息处置失败: {e!s}")
+            if can_dispose and await admin_check(user_id, group_id, self_id, event.bot):
+                disposal_attempted = True
+                try:
+                    await dispose_msg(
+                        message_id=message_id,
+                        group_id=group_id,
+                        user_id=user_id,
+                        self_id=self_id,
+                        client=event.bot,
+                    )
+                    disposal_succeeded = True
+                except Exception as e:
+                    disposal_succeeded = False
+                    logger.error(f"消息处置失败: {e!s}")
+
+        await self._forward_violation_message(
+            event,
+            res,
+            recall_status=disposal_succeeded if disposal_attempted else None,
+        )
 
     async def _process_censor_result(
         self, event: AstrMessageEvent, res: CensorResult | None
@@ -257,6 +267,8 @@ class AIOCensor(Star):
         """根据审查结果执行后续逻辑，返回是否需要终止处理"""
         if not res or res.risk_level == RiskLevel.Pass:
             return False
+
+        event.stop_event()
 
         extra_context = {
             "user_id_str": event.get_sender_id(),
@@ -275,24 +287,31 @@ class AIOCensor(Star):
         if self.config.get("enable_audit_log", True):
             self.db_mgr.add_audit_log(res)
 
-        if (
-            event.get_platform_name() == "aiocqhttp"
-            and event.get_group_id()
-        ):
+        forward_settings = self.config.get("forward_violation_message") or {}
+        should_forward = forward_settings.get("enabled") and res.risk_level in {
+            RiskLevel.Review,
+            RiskLevel.Block,
+        }
+
+        if event.get_platform_name() == "aiocqhttp" and event.get_group_id():
             if res.risk_level == RiskLevel.Review:
                 self._cache_aiocqhttp_bot(event)
+                if should_forward:
+                    await self._forward_violation_message(
+                        event, res, recall_status=None
+                    )
             elif res.risk_level == RiskLevel.Block:
                 await self._handle_aiocqhttp_group_message(event, res)
             else:
                 logger.warning("非 aiocqhttp 平台的群消息，无法自动处置")
-            event.stop_event()
             return True
+
+        if should_forward:
+            await self._forward_violation_message(event, res, recall_status=None)
 
         return False
 
-    async def _censor_texts(
-        self, event: AstrMessageEvent, texts: list[str]
-    ) -> bool:
+    async def _censor_texts(self, event: AstrMessageEvent, texts: list[str]) -> bool:
         """对文本内容执行审查，返回是否命中风险并终止处理"""
         seen: set[str] = set()
         for text in texts:
@@ -324,6 +343,109 @@ class AIOCensor(Star):
                 texts.extend(self._extract_texts_from_reply(item))
 
         return texts
+
+    def _summarize_message_components(
+        self, components: list[BaseMessageComponent] | None
+    ) -> str:
+        if not components:
+            return ""
+
+        parts: list[str] = []
+        for comp in components:
+            if isinstance(comp, Plain):
+                text = comp.text.strip()
+                if text:
+                    parts.append(text)
+            elif isinstance(comp, Image):
+                label = "[图片]"
+                resource = comp.url or comp.file or ""
+                if resource:
+                    label = f"{label} {resource}"
+                parts.append(label)
+            elif isinstance(comp, Json):
+                parts.append("[JSON]")
+            elif isinstance(comp, Reply):
+                parts.append("[引用消息]")
+            else:
+                parts.append(f"[{comp.type.value}]")
+
+        return "\n".join(part for part in parts if part).strip()
+
+    async def _forward_violation_message(
+        self,
+        event: AstrMessageEvent,
+        res: CensorResult,
+        recall_status: bool | None = None,
+    ) -> None:
+        """在启用配置时转发违规或需复审的消息，并附带必要上下文信息"""
+        settings = self.config.get("forward_violation_message") or {}
+        if not settings.get("enabled"):
+            return
+
+        target_umo = settings.get("target_umo")
+        if not target_umo:
+            logger.warning("开启违规消息转发但未设置 target_umo，已跳过转发")
+            return
+
+        lines: list[str] = ["[AIOCensor] 违规内容通知"]
+
+        risk_level = res.risk_level.name if res.risk_level else "UNKNOWN"
+        lines.append(f"风险等级: {risk_level}")
+
+        platform_name = event.get_platform_name() or "-"
+        lines.append(f"平台: {platform_name}")
+
+        platform_id = event.get_platform_id()
+        if platform_id:
+            lines.append(f"平台 ID: {platform_id}")
+
+        group_id = event.get_group_id()
+        if group_id:
+            lines.append(f"群号: {group_id}")
+
+        sender_id = event.get_sender_id()
+        if sender_id:
+            lines.append(f"发送者: {sender_id}")
+
+        if event.unified_msg_origin:
+            lines.append(f"会话 UMO: {event.unified_msg_origin}")
+
+        if platform_name == "aiocqhttp":
+            status_map = {
+                True: "自动撤回状态: 成功",
+                False: "自动撤回状态: 失败",
+                None: "自动撤回状态: 未执行",
+            }
+            lines.append(status_map[recall_status])
+
+        if res.reason:
+            reason_text = ", ".join(sorted(res.reason))
+            lines.append(f"命中原因: {reason_text}")
+
+        extra = res.extra or {}
+        message_id = extra.get("message_id")
+        if message_id:
+            lines.append(f"原始消息 ID: {message_id}")
+
+        summary = self._summarize_message_components(
+            getattr(event.message_obj, "message", None)
+        )
+        if summary:
+            lines.append("原始消息内容:")
+            lines.append(summary)
+        else:
+            captured = res.message.content if res.message else None
+            if captured:
+                lines.append("捕获内容:")
+                lines.append(captured)
+            else:
+                lines.append("原始消息内容: [无文本内容，可能包含非文本组件]")
+
+        try:
+            message_chain = MessageChain().message("\n".join(lines))
+            await self.context.send_message(target_umo, message_chain)
+        except Exception as exc:
+            logger.error(f"转发违规消息失败: {exc!s}")
 
     def _extract_texts_from_json(self, component: Json) -> list[str]:
         texts: list[str] = []
