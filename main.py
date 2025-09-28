@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import secrets
 import time
@@ -12,7 +13,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler  # type:ignore
 
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
-from astrbot.api.message_components import Image, Plain
+from astrbot.api.message_components import Image, Json, Plain, Reply
 from astrbot.api.star import Context, Star, register
 from astrbot.core.message.components import BaseMessageComponent
 from astrbot.core.provider.entites import LLMResponse
@@ -250,6 +251,114 @@ class AIOCensor(Star):
             except Exception as e:
                 logger.error(f"消息处置失败: {e!s}")
 
+    async def _process_censor_result(
+        self, event: AstrMessageEvent, res: CensorResult | None
+    ) -> bool:
+        """根据审查结果执行后续逻辑，返回是否需要终止处理"""
+        if not res or res.risk_level == RiskLevel.Pass:
+            return False
+
+        extra_context = {
+            "user_id_str": event.get_sender_id(),
+            "platform_name": event.get_platform_name(),
+            "platform_id": event.get_platform_id(),
+            "self_id": event.get_self_id(),
+            "group_id": event.get_group_id(),
+            "message_id": getattr(event.message_obj, "message_id", None),
+            "unified_msg_origin": event.unified_msg_origin,
+        }
+        res.extra = {
+            **(res.extra or {}),
+            **{k: v for k, v in extra_context.items() if v is not None},
+        }
+
+        if self.config.get("enable_audit_log", True):
+            self.db_mgr.add_audit_log(res)
+
+        if (
+            event.get_platform_name() == "aiocqhttp"
+            and event.get_group_id()
+        ):
+            if res.risk_level == RiskLevel.Review:
+                self._cache_aiocqhttp_bot(event)
+            elif res.risk_level == RiskLevel.Block:
+                await self._handle_aiocqhttp_group_message(event, res)
+            else:
+                logger.warning("非 aiocqhttp 平台的群消息，无法自动处置")
+            event.stop_event()
+            return True
+
+        return False
+
+    async def _censor_texts(
+        self, event: AstrMessageEvent, texts: list[str]
+    ) -> bool:
+        """对文本内容执行审查，返回是否命中风险并终止处理"""
+        seen: set[str] = set()
+        for text in texts:
+            normalized = text.strip()
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            res = await self.censor_flow.submit_text(
+                normalized, event.unified_msg_origin
+            )
+            if await self._process_censor_result(event, res):
+                return True
+        return False
+
+    def _extract_texts_from_components(
+        self, components: list[BaseMessageComponent] | None
+    ) -> list[str]:
+        texts: list[str] = []
+        if not components:
+            return texts
+
+        for item in components:
+            if isinstance(item, Plain):
+                if item.text:
+                    texts.append(item.text)
+            elif isinstance(item, Json):
+                texts.extend(self._extract_texts_from_json(item))
+            elif isinstance(item, Reply):
+                texts.extend(self._extract_texts_from_reply(item))
+
+        return texts
+
+    def _extract_texts_from_json(self, component: Json) -> list[str]:
+        texts: list[str] = []
+        raw = component.data
+
+        payload: Any | None = None
+        if isinstance(raw, str):
+            try:
+                payload = json.loads(raw)
+            except Exception as exc:
+                logger.debug(f"解析JSON组件失败: {exc!s}")
+        elif isinstance(raw, dict):
+            payload = raw
+
+        if payload is not None:
+            texts.extend(self._collect_strings_from_json(payload))
+        elif isinstance(raw, str) and raw.strip():
+            texts.append(raw)
+
+        return texts
+
+    def _collect_strings_from_json(self, obj: Any) -> list[str]:
+        collected: list[str] = []
+        if isinstance(obj, dict):
+            for value in obj.values():
+                collected.extend(self._collect_strings_from_json(value))
+        elif isinstance(obj, list):
+            for item in obj:
+                collected.extend(self._collect_strings_from_json(item))
+        elif isinstance(obj, str):
+            stripped = obj.strip()
+            if stripped:
+                collected.append(stripped)
+        return collected
+
     async def _handle_webui_dispose(self, payload: dict[str, Any] | None) -> None:
         """处理 WebUI 发起的处置请求"""
         if not payload:
@@ -340,38 +449,16 @@ class AIOCensor(Star):
                     res = await self.censor_flow.submit_image(
                         comp.url, event.unified_msg_origin
                     )
+                elif isinstance(comp, Json):
+                    texts = self._extract_texts_from_json(comp)
+                    if await self._censor_texts(event, texts):
+                        break
+                    continue
                 else:
                     continue
 
-                if res and res.risk_level != RiskLevel.Pass:
-                    extra_context = {
-                        "user_id_str": event.get_sender_id(),
-                        "platform_name": event.get_platform_name(),
-                        "platform_id": event.get_platform_id(),
-                        "self_id": event.get_self_id(),
-                        "group_id": event.get_group_id(),
-                        "message_id": getattr(event.message_obj, "message_id", None),
-                        "unified_msg_origin": event.unified_msg_origin,
-                    }
-                    res.extra = {
-                        **(res.extra or {}),
-                        **{k: v for k, v in extra_context.items() if v is not None},
-                    }
-                    # 只有在启用日志记录时才添加审核日志
-                    if self.config.get("enable_audit_log", True):
-                        self.db_mgr.add_audit_log(res)
-                    if (
-                        event.get_platform_name() == "aiocqhttp"
-                        and event.get_group_id()
-                    ):
-                        if res.risk_level == RiskLevel.Review:
-                            self._cache_aiocqhttp_bot(event)
-                        elif res.risk_level == RiskLevel.Block:
-                            await self._handle_aiocqhttp_group_message(event, res)
-                        else:
-                            logger.warning("非 aiocqhttp 平台的群消息，无法自动处置")
-                        event.stop_event()
-                        break
+                if await self._process_censor_result(event, res):
+                    break
         except Exception as e:
             logger.error(f"消息审查失败: {e!s}")
 
