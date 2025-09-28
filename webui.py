@@ -246,23 +246,27 @@ class WebUIServer:
                     )
 
                 actions = data.get("actions", [])
+                log_entry = None
+                notify_dispose = False
+
                 for action in actions:
                     if action == "block":
-                        log = self._db_mgr.get_audit_log(log_id)
-                        if not log:
+                        if log_entry is None:
+                            log_entry = self._db_mgr.get_audit_log(log_id)
+                        if not log_entry:
                             return await format_response(
                                 message="找不到指定的审核日志", status_code=404
                             )
 
                         if (
-                            not log.result.extra
-                            or "user_id_str" not in log.result.extra
+                            not log_entry.result.extra
+                            or "user_id_str" not in log_entry.result.extra
                         ):
                             return await format_response(
                                 message="审核日志中缺少用户ID信息", status_code=400
                             )
 
-                        user_id = log.result.extra["user_id_str"]
+                        user_id = log_entry.result.extra["user_id_str"]
                         reason = f"根据审核日志 {log_id} 添加"
 
                         existing = self._db_mgr.search_blacklist(user_id)
@@ -274,16 +278,24 @@ class WebUIServer:
                             "blacklist_updated", {"user_id": user_id, "reason": reason}
                         )
                     elif action == "dispose":
-                        return await format_response(
-                            message="功能未实现",
-                            status_code=400,  # TODO:实现控制台处置
-                        )
+                        if log_entry is None:
+                            log_entry = self._db_mgr.get_audit_log(log_id)
+                        if not log_entry:
+                            return await format_response(
+                                message="找不到指定的审核日志", status_code=404
+                            )
+                        notify_dispose = True
                     else:
                         return await format_response(
                             message="无效的操作", status_code=400
                         )
+                if notify_dispose:
+                    self._notify_change(
+                        "audit_log_dispose",
+                        {"log_id": log_id, "actions": actions},
+                    )
                 self._notify_change("audit_log_updated", {"log_id": log_id})
-                return await format_response(message="处置成功", status_code=200)
+                return await format_response(message="处置提交成功，请通过控制台查看结果", status_code=200)
             except Exception as e:
                 logger.error(f"处置失败 {log_id}: {e!s}", exc_info=True)
                 return await format_response(message="处置失败", status_code=500)

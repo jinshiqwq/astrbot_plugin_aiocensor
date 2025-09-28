@@ -47,6 +47,8 @@ class AIOCensor(Star):
 
         # 存储 (group_id_str, user_id_str) -> expiry_ts
         self.new_member_watchlist: dict[tuple[str, str], int] = {}
+        # 缓存 aiocqhttp bot 客户端，key: (platform_id, self_id)
+        self._aiocqhttp_bot_cache: dict[tuple[str, str], dict[str, Any]] = {}
 
     async def initialize(self):
         logger.debug("初始化 AIOCensor 组件")
@@ -163,6 +165,11 @@ class AIOCensor(Star):
                 break
             if event_type in {"blacklist_updated", "sensitive_words_updated"}:
                 await self._update_censors()
+            elif event_type == "audit_log_dispose":
+                payload: dict[str, Any] | None = (
+                    message.get("payload") if isinstance(message, dict) else None
+                )
+                await self._handle_webui_dispose(payload)
             else:
                 logger.debug(f"忽略未知的通知事件: {event_type}")
 
@@ -173,6 +180,33 @@ class AIOCensor(Star):
         remove_keys = [k for k, ts in items if ts <= now]
         for k in remove_keys:
             self.new_member_watchlist.pop(k, None)
+
+    def _cache_aiocqhttp_bot(self, event: AstrMessageEvent) -> None:
+        """缓存 aiocqhttp bot 客户端以供后续手动处置使用"""
+        platform_id = str(event.get_platform_id() or "")
+        self_id = event.get_self_id()
+        if not self_id:
+            return
+
+        key = (platform_id, str(self_id))
+        self._aiocqhttp_bot_cache[key] = {
+            "bot": getattr(event, "bot", None),
+        }
+
+    def _get_cached_aiocqhttp_bot(self, platform_id: str, self_id: str):
+        """根据 platform_id/self_id 从缓存中获取 aiocqhttp bot"""
+        search_keys = [
+            (platform_id or "", self_id),
+        ]
+        if platform_id:
+            # 兼容旧数据未记录 platform_id 的情况
+            search_keys.append(("", self_id))
+
+        for key in search_keys:
+            cache_entry = self._aiocqhttp_bot_cache.get(key)
+            if cache_entry:
+                return cache_entry.get("bot")
+        return None
 
     async def _handle_aiocqhttp_group_message(
         self, event: AstrMessageEvent, res: CensorResult
@@ -216,6 +250,81 @@ class AIOCensor(Star):
             except Exception as e:
                 logger.error(f"消息处置失败: {e!s}")
 
+    async def _handle_webui_dispose(self, payload: dict[str, Any] | None) -> None:
+        """处理 WebUI 发起的处置请求"""
+        if not payload:
+            logger.warning("收到空的处置请求，已忽略")
+            return
+
+        log_id = payload.get("log_id")
+        actions = payload.get("actions") or []
+
+        if not log_id:
+            logger.warning("WebUI 处置请求缺少 log_id，已忽略")
+            return
+
+        if "dispose" not in actions:
+            logger.debug(f"审核日志 {log_id} 未包含需要处理的 dispose 操作，已忽略")
+            return
+
+        try:
+            log_entry = self.db_mgr.get_audit_log(log_id)
+        except Exception as exc:
+            logger.error(f"查询审核日志 {log_id} 失败: {exc!s}")
+            return
+
+        if not log_entry:
+            logger.warning(f"未找到审核日志 {log_id}，无法执行处置")
+            return
+
+        extra = log_entry.result.extra or {}
+        platform_name = extra.get("platform_name") or extra.get("platform")
+        if platform_name != "aiocqhttp":
+            logger.warning(
+                f"审核日志 {log_id} 属于平台 {platform_name}，当前仅支持 aiocqhttp 手动处置"
+            )
+            return
+
+        message_id = extra.get("message_id")
+        group_id = extra.get("group_id")
+        user_id = extra.get("user_id_str") or extra.get("user_id")
+        self_id = extra.get("self_id")
+        if not all([message_id, group_id, user_id, self_id]):
+            logger.warning(
+                f"审核日志 {log_id} 缺少处置信息(message_id/group_id/user_id/self_id)，无法执行处置"
+            )
+            return
+
+        try:
+            message_id_int = int(message_id)
+            group_id_int = int(group_id)
+            user_id_int = int(user_id)
+            self_id_int = int(self_id)
+        except (TypeError, ValueError):
+            logger.warning(f"审核日志 {log_id} 存在无法解析的处置信息，已忽略")
+            return
+
+        platform_id = str(extra.get("platform_id") or "")
+        client = self._get_cached_aiocqhttp_bot(platform_id, str(self_id_int))
+        if client is None:
+            print(self._aiocqhttp_bot_cache)
+            logger.warning(
+                f"未找到平台 {platform_name} (platform_id={platform_id}) 自身 ID {self_id_int} 的缓存客户端，无法执行审核日志 {log_id} 的处置"
+            )
+            return
+
+        try:
+            await dispose_msg(
+                message_id=message_id_int,
+                group_id=group_id_int,
+                user_id=user_id_int,
+                self_id=self_id_int,
+                client=client,
+            )
+            logger.info(f"已根据 WebUI 请求处置审核日志 {log_id}")
+        except Exception as exc:
+            logger.error(f"执行审核日志 {log_id} 处置失败: {exc!s}")
+
     async def handle_message(
         self, event: AstrMessageEvent, chain: list[BaseMessageComponent]
     ):
@@ -236,16 +345,29 @@ class AIOCensor(Star):
                     continue
 
                 if res and res.risk_level != RiskLevel.Pass:
-                    res.extra = {"user_id_str": event.get_sender_id()}
+                    extra_context = {
+                        "user_id_str": event.get_sender_id(),
+                        "platform_name": event.get_platform_name(),
+                        "platform_id": event.get_platform_id(),
+                        "self_id": event.get_self_id(),
+                        "group_id": event.get_group_id(),
+                        "message_id": getattr(event.message_obj, "message_id", None),
+                        "unified_msg_origin": event.unified_msg_origin,
+                    }
+                    res.extra = {
+                        **(res.extra or {}),
+                        **{k: v for k, v in extra_context.items() if v is not None},
+                    }
                     # 只有在启用日志记录时才添加审核日志
                     if self.config.get("enable_audit_log", True):
                         self.db_mgr.add_audit_log(res)
-
-                    if res.risk_level == RiskLevel.Block:
-                        if (
-                            event.get_platform_name() == "aiocqhttp"
-                            and event.get_group_id()
-                        ):
+                    if (
+                        event.get_platform_name() == "aiocqhttp"
+                        and event.get_group_id()
+                    ):
+                        if res.risk_level == RiskLevel.Review:
+                            self._cache_aiocqhttp_bot(event)
+                        elif res.risk_level == RiskLevel.Block:
                             await self._handle_aiocqhttp_group_message(event, res)
                         else:
                             logger.warning("非 aiocqhttp 平台的群消息，无法自动处置")
