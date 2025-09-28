@@ -481,6 +481,20 @@ class AIOCensor(Star):
                 collected.append(stripped)
         return collected
 
+    def _extract_texts_from_reply(self, reply: Reply) -> list[str]:
+        texts: list[str] = []
+        if getattr(reply, "message_str", None):
+            texts.append(str(reply.message_str))
+        if getattr(reply, "text", None):
+            texts.append(str(reply.text))
+
+        texts.extend(self._extract_texts_from_components(getattr(reply, "chain", None)))
+        texts.extend(
+            self._extract_texts_from_components(getattr(reply, "message", None))
+        )
+
+        return texts
+
     async def _handle_webui_dispose(self, payload: dict[str, Any] | None) -> None:
         """处理 WebUI 发起的处置请求"""
         if not payload:
@@ -571,6 +585,11 @@ class AIOCensor(Star):
                     res = await self.censor_flow.submit_image(
                         comp.url, event.unified_msg_origin
                     )
+                elif isinstance(comp, Reply):
+                    texts = self._extract_texts_from_reply(comp)
+                    if await self._censor_texts(event, texts):
+                        break
+                    continue
                 elif isinstance(comp, Json):
                     texts = self._extract_texts_from_json(comp)
                     if await self._censor_texts(event, texts):
