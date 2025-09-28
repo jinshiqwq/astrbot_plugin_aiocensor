@@ -307,7 +307,6 @@ class AIOCensor(Star):
         platform_id = str(extra.get("platform_id") or "")
         client = self._get_cached_aiocqhttp_bot(platform_id, str(self_id_int))
         if client is None:
-            print(self._aiocqhttp_bot_cache)
             logger.warning(
                 f"未找到平台 {platform_name} (platform_id={platform_id}) 自身 ID {self_id_int} 的缓存客户端，无法执行审核日志 {log_id} 的处置"
             )

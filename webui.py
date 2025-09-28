@@ -1,7 +1,6 @@
 import asyncio
 import os
 import atexit
-from datetime import datetime, timedelta, timezone
 from functools import wraps
 from multiprocessing.queues import Queue as MPQueue
 from typing import Any
@@ -67,25 +66,15 @@ class WebUIServer:
                 response.update(data)
             return jsonify(response), status_code
 
-        def generate_tokens() -> tuple[str, str]:
-            """生成JWT访问令牌和刷新令牌"""
-            access_token = jwt.encode(
+        def generate_token() -> str:
+            """生成长期有效的 JWT 访问令牌"""
+            return jwt.encode(
                 {
                     "role": "admin",
-                    "exp": datetime.now(timezone.utc) + timedelta(minutes=15),
                 },
                 self._secret_key,
                 algorithm="HS256",
             )
-            refresh_token = jwt.encode(
-                {
-                    "role": "admin",
-                    "exp": datetime.now(timezone.utc) + timedelta(days=30),
-                },
-                self._secret_key,
-                algorithm="HS256",
-            )
-            return access_token, refresh_token
 
         def verify_token(token: str) -> dict[str, Any] | None:
             """验证JWT令牌"""
@@ -147,49 +136,14 @@ class WebUIServer:
                     logger.warning("无效的登录尝试，密码错误")
                     return await format_response(message="密码错误", status_code=401)
 
-                access_token, refresh_token = generate_tokens()
+                access_token = generate_token()
                 return await format_response(
-                    data={"access_token": access_token, "refresh_token": refresh_token},
+                    data={"access_token": access_token},
                     message="登录成功",
                 )
             except Exception as e:
                 logger.error(f"登录错误: {e!s}")
                 return await format_response(message="登录失败", status_code=500)
-
-        @self._app.route("/api/refresh", methods=["POST"])
-        async def refresh() -> tuple[Response, int]:
-            """使用刷新令牌获取新的访问令牌"""
-            try:
-                data = await request.get_json()
-                if not data:
-                    return await format_response(
-                        message="无效的请求数据", status_code=400
-                    )
-
-                refresh_token = data.get("refresh_token", "")
-                refresh_token = clean_input(refresh_token)
-
-                if not refresh_token:
-                    return await format_response(
-                        message="缺少刷新令牌", status_code=400
-                    )
-
-                payload = verify_token(refresh_token)
-                if not payload:
-                    return await format_response(
-                        message="无效的刷新令牌", status_code=401
-                    )
-
-                access_token, new_refresh_token = generate_tokens()
-                return await format_response(
-                    data={
-                        "access_token": access_token,
-                        "refresh_token": new_refresh_token,
-                    },
-                    message="刷新成功",
-                )
-            except Exception:
-                return await format_response(message="刷新令牌失败", status_code=500)
 
         @self._app.route("/api/audit-logs", methods=["GET"])
         @token_required
