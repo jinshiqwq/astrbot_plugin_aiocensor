@@ -106,6 +106,12 @@
       "api_key": {
         "description": "LLM API 密钥",
         "type": "string"
+      },
+      "sys_prompt": {
+        "description": "LLM 系统提示词",
+        "type": "string",
+        "hint": "留空使用默认提示词",
+        "editor_mode": true
       }
     }
   },

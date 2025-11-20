@@ -49,6 +49,7 @@ class CensorFlow(AbstractAsyncContextManager):
                 "model": config.get("llm", {}).get("model"),
                 "base_url": config.get("llm", {}).get("base_url"),
                 "api_key": config.get("llm", {}).get("api_key"),
+                "sys_prompt": config.get("llm", {}).get("sys_prompt"),
             },
             "tencent": {
                 "secret_id": config.get("tencent", {}).get("secret_id"),

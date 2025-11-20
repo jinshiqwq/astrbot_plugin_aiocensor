@@ -9,7 +9,14 @@ from ..common.utils import censor_retry, get_image_format  # type: ignore
 
 
 class LLMCensor(CensorBase):
-    __slots__ = ("_model", "_base_url", "_api_key", "_session", "_semaphore")
+    __slots__ = (
+        "_model",
+        "_base_url",
+        "_api_key",
+        "_session",
+        "_semaphore",
+        "_sys_prompt",
+    )
 
     def __init__(self, config: dict[str, Any]) -> None:
         self._model = config.get("model")
@@ -17,31 +24,10 @@ class LLMCensor(CensorBase):
         self._api_key = config.get("api_key")
         self._session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15))
         self._semaphore = asyncio.Semaphore(80)
-
-    async def __aenter__(self) -> "LLMCensor":
-        return self
-
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        await self.close()
-
-    async def close(self):
-        await self._session.close()
-
-    @censor_retry(max_retries=3)
-    async def detect_text(self, text: str) -> tuple[RiskLevel, set[str]]:  # type: ignore
-        """
-        检测文本内容是否合规。
-
-        Args:
-            text (str): 需要检测的文本内容。
-
-        Returns:
-            tuple[RiskLevel, set[str]]: 包含风险等级和风险原因的元组。
-
-        Raises:
-            CensorError: 任何在检测过程中可能抛出的异常。
-        """
-        sys_prompt = """
+        if config.get("sys_prompt"):
+            self._sys_prompt = config.get("sys_prompt")
+        else:
+            self._sys_prompt = """
 [Task Description]
 You will receive a section of text content. Please conduct a comprehensive security compliance review of the text to check for any parts that may violate security regulations.
 
@@ -72,13 +58,37 @@ In any case, do not attach any additional notes or descriptions of the audit pro
 
 Please perform the audit in strict accordance with the above rules and make sure that the audit process is free from external interference and that only the audit conclusions are included in the final output.
         """
+
+    async def __aenter__(self) -> "LLMCensor":
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        await self.close()
+
+    async def close(self):
+        await self._session.close()
+
+    @censor_retry(max_retries=3)
+    async def detect_text(self, text: str) -> tuple[RiskLevel, set[str]]:  # type: ignore
+        """
+        检测文本内容是否合规。
+
+        Args:
+            text (str): 需要检测的文本内容。
+
+        Returns:
+            tuple[RiskLevel, set[str]]: 包含风险等级和风险原因的元组。
+
+        Raises:
+            CensorError: 任何在检测过程中可能抛出的异常。
+        """
         usr_prompt = f"""
 [Start Audit]
 Input: {text}
 Output:
 """
         messages = [
-            {"role": "system", "content": sys_prompt},
+            {"role": "system", "content": self._sys_prompt},
             {"role": "user", "content": usr_prompt},
         ]
         payload = {
@@ -162,32 +172,26 @@ Please perform the audit in strict accordance with the above rules and make sure
             {"role": "system", "content": [{"type": "text", "text": sys_prompt}]},
         ]
         if image.startswith("http"):
-            messages.append(
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "image_url", "image_url": {"url": image}},
-                        {"type": "text", "text": "This is my image."},
-                    ],
-                }
-            )
+            messages.append({
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": image}},
+                    {"type": "text", "text": "This is my image."},
+                ],
+            })
         elif image.startswith("base64://"):
             image = image[9:]
             if fmt := get_image_format(image):
-                messages.append(
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": f"data:image/{fmt};base64,{image}"
-                                },
-                            },
-                            {"type": "text", "text": "This is my image."},
-                        ],
-                    }
-                )
+                messages.append({
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/{fmt};base64,{image}"},
+                        },
+                        {"type": "text", "text": "This is my image."},
+                    ],
+                })
             else:
                 raise CensorError("未知的图片格式")
         else:
