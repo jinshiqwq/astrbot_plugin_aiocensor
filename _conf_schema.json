@@ -115,6 +115,30 @@
       }
     }
   },
+    "vllm": {
+    "description": "LLM 图片审核配置",
+    "type": "object",
+    "items": {
+      "model": {
+        "description": "模型名称",
+        "type": "string"
+      },
+      "base_url": {
+        "description": "基础地址",
+        "type": "string"
+      },
+      "api_key": {
+        "description": "LLM API 密钥",
+        "type": "string"
+      },
+      "sys_prompt": {
+        "description": "LLM 系统提示词",
+        "type": "string",
+        "hint": "留空使用默认提示词",
+        "editor_mode": true
+      }
+    }
+  },
   "tencent": {
     "description": "腾讯云审核配置",
     "type": "object",
