@@ -99,6 +99,10 @@
         "description": "LLM 模型名称",
         "type": "string"
       },
+      "vmodel": {
+        "description": "LLM 视觉审核模型名称",
+        "type": "string"
+      },
       "base_url": {
         "description": "LLM API 基础地址",
         "type": "string"
@@ -112,24 +116,6 @@
         "type": "string",
         "hint": "留空使用默认提示词",
         "editor_mode": true
-      }
-    }
-  },
-    "vllm": {
-    "description": "LLM 图片审核配置",
-    "type": "object",
-    "items": {
-      "vmodel": {
-        "description": "模型名称",
-        "type": "string"
-      },
-      "vbase_url": {
-        "description": "基础地址",
-        "type": "string"
-      },
-      "vapi_key": {
-        "description": "LLM API 密钥",
-        "type": "string"
       }
     }
   },
