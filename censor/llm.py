@@ -16,6 +16,7 @@ class LLMCensor(CensorBase):
         "_session",
         "_semaphore",
         "_sys_prompt",
+        "_vmodel,
     )
 
     def __init__(self, config: dict[str, Any]) -> None:
