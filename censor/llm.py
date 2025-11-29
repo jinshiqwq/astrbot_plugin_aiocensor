@@ -22,6 +22,7 @@ class LLMCensor(CensorBase):
         self._model = config.get("model")
         self._base_url = config.get("base_url")
         self._api_key = config.get("api_key")
+        self._vmodel = config.get("vmodel")
         self._session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15))
         self._semaphore = asyncio.Semaphore(80)
         if config.get("sys_prompt"):
@@ -197,7 +198,7 @@ Please perform the audit in strict accordance with the above rules and make sure
         else:
             raise CensorError("预期外的输入")
         payload = {
-            "model": self._model,
+            "model": self._vmodel,
             "messages": messages,
             "stream": False,
             "temperature": 0,
