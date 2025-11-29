@@ -138,8 +138,9 @@ Output:
         Raises:
             CensorError: 任何在检测过程中可能抛出的异常。
         """
-
+        # 使用 self._sys_prompt，与文本审核保持一致
         sys_prompt = self._sys_prompt
+        
         messages = [
             {"role": "system", "content": [{"type": "text", "text": sys_prompt}]},
         ]
@@ -168,8 +169,14 @@ Output:
                 raise CensorError("未知的图片格式")
         else:
             raise CensorError("预期外的输入")
+        
+        # 确保模型可用
+        model = self._vmodel or self._model
+        if not model:
+            raise CensorError("未配置模型名称")
+        
         payload = {
-            "model": self._vmodel,
+            "model": model,
             "messages": messages,
             "stream": False,
             "temperature": 0.1,
@@ -187,7 +194,13 @@ Output:
                 response.raise_for_status()
                 result = await response.json()
 
-                res = result["choices"][0]["message"]["content"]
+                # 增加容错处理
+                try:
+                    res = result["choices"][0]["message"]["content"]
+                    if not res:
+                        raise CensorError("空响应内容")
+                except (KeyError, IndexError, TypeError) as e:
+                    raise CensorError(f"解析响应失败: {e}, 原始响应: {result}")
 
                 reason: set[str] = {res}
 
@@ -197,3 +210,4 @@ Output:
                     return RiskLevel.Block, reason
                 else:
                     return RiskLevel.Review, reason
+
